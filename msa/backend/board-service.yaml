@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: board-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: board-service
+  template:
+    metadata:
+      labels:
+        app: board-service
+    spec:
+      containers:
+      - name: board-service
+        image: jarrodkim/fastapi-backend:latest
+        env:
+        - name: DB_HOST
+          value: mariadb
+        - name: DB_NAME
+          value: boarddb
+        - name: DB_USER
+          value: boarduser
+        - name: DB_PASSWORD
+          value: boardpass
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+      volumes:
+      - name: app-code
+        configMap:
+          name: board-service
+---
+# 📦 게시판 서비스 FastAPI 코드
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: board-service
+data:
+  main.py: |
+    from fastapi import FastAPI
+    from pydantic import BaseModel
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.pool import QueuePool
+
+    app = FastAPI()
+
+    # MariaDB 연결 풀 설정
+    DATABASE_URL = "mysql+pymysql://boarduser:boardpass@mariadb:3306/boarddb"
+    engine = create_engine(DATABASE_URL, poolclass=QueuePool, pool_size=5, max_overflow=10)
+
+    class Post(BaseModel):
+        title: str
+        content: str
+
+    @app.get("/api/board/posts")
+    async def get_posts():
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT id, title, content, created_at FROM posts"))
+            rows = result.fetchall()
+        return {"posts": [dict(r) for r in rows]}
+
+    @app.post("/api/board/posts")
+    async def create_post(post: Post):
+        print("🚀 JSON 파싱 완료:", post)
+        with engine.connect() as conn:
+            print("✅ DB 연결됨")
+            conn.execute(
+                text("INSERT INTO posts (title, content) VALUES (:title, :content)"),
+                {"title": post.title, "content": post.content}
+            )
+        print("✅ 게시글 INSERT 완료")
+        return {"message": "게시글이 등록되었습니다!"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: board-service
+spec:
+  selector:
+    app: board-service
+  ports:
+  - port: 8000
+    targetPort: 80
